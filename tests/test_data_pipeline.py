@@ -1,44 +1,51 @@
-# Deep Learning — Visual Pattern Recognition & Image Classification
+from pathlib import Path
 
-Exploring visual pattern recognition and image classification using deep learning and convolutional neural networks (CNNs), with **Cats vs Dogs** classification as a practical case study.
+import pytest
+from PIL import Image
+from src.data_pipeline import inventory, stratified_split
 
-## Project objective
 
-Develop a model that learns visual patterns from labeled images and predicts whether a new image contains a cat or a dog. This repository preserves an earlier CNN learning project and documents its planned modernization and evaluation.
+def _make_image(path: Path, color):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (12, 12), color).save(path)
 
-## Original CNN approach
 
-The historical implementation uses TensorFlow/Keras with:
-- **Input:** 60 × 60 RGB images
-- **Normalization:** Batch normalization at the model input
-- **Feature extraction:** Two convolutional layers (32 and 64 filters, 5 × 5 kernels), each followed by 2 × 2 max pooling
-- **Classification:** Flatten → Dense (32, ReLU) → Dropout (0.4) → Dense (2, softmax)
-- **Training configuration:** Adam optimizer, categorical cross-entropy loss, accuracy metric
-- **Training stages in source code:** 25 epochs using the initial training dataset, followed by 50 epochs using a larger Kaggle training dataset
+def test_inventory_and_reproducible_splits(tmp_path):
+    for i in range(20):
+        _make_image(tmp_path / "Cat" / f"cat_{i}.png", (i, 1, 2))
+        _make_image(tmp_path / "Dog" / f"dog_{i}.png", (1, i, 3))
+    valid, rejected = inventory(tmp_path)
+    assert len(valid) == 40
+    assert rejected == []
+    first = stratified_split(valid)
+    assert first == stratified_split(list(reversed(valid)))
+    for label in ("Cat", "Dog"):
+        assert sum(x["label"] == label and x["split"] == "train" for x in first) == 14
+        assert sum(x["label"] == label and x["split"] == "val" for x in first) == 3
+        assert sum(x["label"] == label and x["split"] == "test" for x in first) == 3
 
-These details describe the historical **source code**, not newly verified execution results.
 
-## Repository structure
+def test_invalid_and_duplicate_images(tmp_path):
+    _make_image(tmp_path / "Cat" / "cat_1.png", (20, 30, 40))
+    (tmp_path / "Cat" / "cat_2.png").write_bytes((tmp_path / "Cat" / "cat_1.png").read_bytes())
+    (tmp_path / "Dog").mkdir()
+    (tmp_path / "Dog" / "dog_1.jpg").write_text("not an image")
+    valid, rejected = inventory(tmp_path)
+    assert len(valid) == 1
+    assert {x["reason"].split(":")[0] for x in rejected} == {"duplicate_exact", "invalid_image"}
 
-| Location | Purpose |
-| --- | --- |
-| `original/` | Preserved historical implementation and notes |
-| `docs/improvement-log.md` | Development findings, planned work, and resolution tracking |
-| `notebooks/` | Planned reproducible experiments and interactive analysis |
-| `src/` | Planned modernized Python implementation |
 
-The `notebooks/` and `src/` directories will be created when their first files are ready.
+def test_conflicting_labels_are_rejected(tmp_path):
+    _make_image(tmp_path / "Cat" / "cat_1.png", (20, 30, 40))
+    (tmp_path / "Dog").mkdir()
+    (tmp_path / "Dog" / "dog_1.png").write_bytes((tmp_path / "Cat" / "cat_1.png").read_bytes())
+    valid, rejected = inventory(tmp_path)
+    assert valid == []
+    assert len(rejected) == 2
+    assert all(x["reason"] == "duplicate_conflicting_label" for x in rejected)
 
-## Development roadmap
 
-1. **Package 01 — Historical baseline:** Preserve original code and document its architecture.
-2. **Package 02 — Modernization:** Establish reproducible data preparation, compatible training code, and train/validation/test separation.
-3. **Package 03 — Evaluation and communication:** Run independent evaluation, document verified results and insights, and prepare the recruiter-facing project narrative.
-
-## Project status
-
-**In development — historical baseline documentation.** Modernized training and independent evaluation have not yet been completed. Verified results will be added after execution.
-
-## License
-
-See [LICENSE](LICENSE). Dataset and third-party material rights are separate from the repository's code license.
+def test_small_class_rejected():
+    with pytest.raises(ValueError, match="At least 7"):
+        stratified_split([{"path": f"cat_{i}", "label": "Cat"} for i in range(3)] +
+                         [{"path": f"dog_{i}", "label": "Dog"} for i in range(7)])
